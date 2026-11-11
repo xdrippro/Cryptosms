@@ -1,68 +1,74 @@
-name: Build Crypto SMS APK
+name: Build Release APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
-      - name: Kodni yuklash
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: ZIP ni ochish
+      - name: Unpack project (zip bo'lsa)
         run: |
-          set -e
           if [ -f settings.gradle.kts ] || [ -f settings.gradle ]; then
-            echo "Loyiha ildizda, ochish shart emas"
-            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
-            exit 0
+            DIR="."
+          else
+            ZIP=$(ls -1 *.zip 2>/dev/null | head -n1 || true)
+            if [ -z "$ZIP" ]; then
+              echo "::error::Repo ildizida na loyiha fayllari, na .zip topildi."
+              exit 1
+            fi
+            echo "Unzip: $ZIP"
+            rm -rf _unpacked && mkdir _unpacked
+            unzip -q "$ZIP" -d _unpacked -x '__MACOSX/*'
+            SETTINGS=$(find _unpacked -maxdepth 3 \( -name settings.gradle.kts -o -name settings.gradle \) | head -n1)
+            if [ -z "$SETTINGS" ]; then
+              echo "::error::Zip ichida settings.gradle(.kts) topilmadi."
+              exit 1
+            fi
+            DIR=$(dirname "$SETTINGS")
           fi
-          ZIP=$(find . -maxdepth 1 -name '*.zip' | head -n 1)
-          if [ -z "$ZIP" ]; then
-            echo "::error::Repo ildizida .zip fayl topilmadi"
-            exit 1
-          fi
-          echo "Ochilmoqda: $ZIP"
-          mkdir -p _src
-          unzip -q -o "$ZIP" -d _src
-          SETTINGS=$(find _src -maxdepth 4 \( -name settings.gradle.kts -o -name settings.gradle \) | head -n 1)
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::ZIP ichida settings.gradle(.kts) topilmadi"
-            exit 1
-          fi
-          DIR=$(dirname "$SETTINGS")
           echo "Loyiha papkasi: $DIR"
           echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
 
-      - name: JDK 17
+      - name: Set up Java 17 (Zulu)
         uses: actions/setup-java@v4
         with:
-          distribution: zulu
-          java-version: 17
+          distribution: 'zulu'
+          java-version: '17'
 
-      - name: Android SDK litsenziyalari
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-
-      - name: Gradle 9.6.0
+      - name: Set up Gradle 9.6.0
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 9.6.0
+          gradle-version: '9.6.0'
 
-      - name: APK yig'ish
+      - name: Build Release APK
         working-directory: ${{ env.PROJECT_DIR }}
-        run: gradle assembleDebug --console=plain --stacktrace
+        run: gradle assembleRelease --console=plain
 
-      - name: APK'ni saqlash
+      - name: Rename APK
+        run: |
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' "$PROJECT_DIR/app/build.gradle.kts")
+          cp "$PROJECT_DIR/app/build/outputs/apk/release/app-release-unsigned.apk" "$GITHUB_WORKSPACE/XYZet-Client-${VERSION}-unsigned.apk"
+          echo "APK_NAME=XYZet-Client-${VERSION}-unsigned.apk" >> "$GITHUB_ENV"
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CryptoSms-debug-apk
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          name: XYZet-Client-unsigned
+          path: ${{ env.APK_NAME }}
+
+      - name: Publish GitHub Release (tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APK_NAME }}
